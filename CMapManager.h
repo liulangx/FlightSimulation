@@ -26,8 +26,8 @@ public:
     osg::Node *getEarthNode() const;
 protected:
     string m_filePath;
-    osg::observer_ptr<osgEarth::MapNode> m_mapNode;
-    osg::observer_ptr<osg::Node> m_earthNode;
+    osg::ref_ptr<osgEarth::MapNode> m_mapNode;
+    osg::ref_ptr<osg::Node> m_earthNode;
 
 };
 

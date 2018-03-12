@@ -9,74 +9,67 @@ CSceneManager::CSceneManager()
 
 int CSceneManager::initScene()
 {
-    CMapManager* mapManager = new CMapManager("/home/liu/Desktop/osgEarth/osgEarthData/bluemarble.earth");
-    osg::Node* earthNode = mapManager->getEarthNode();
-    osgEarth::MapNode* mapNode = mapManager->getMapNode();
-
+    if(int err = readEarthDataBaseFrmFile())
+    {
+        return err;
+    }
     m_root = new osg::Group();
-    m_root -> addChild( earthNode );
-    osg::Group* losGroup = new osg::Group();
-    losGroup->getOrCreateStateSet()->setRenderingHint(osg::StateSet::TRANSPARENT_BIN);
+    m_root -> addChild( m_earthNode.get() );
 
+    m_plane = osgDB::readNodeFile("/home/liu/osg/data/cessna.osg.-90,0,0.rot");
+
+    double h1 = calculateHeightForPoint(GeoPoint(m_geoSRS.get(), 95.8788086, 29.5076538, 0, ALTMODE_ABSOLUTE));
+    GeoPoint location = GeoPoint(m_geoSRS.get(), 95.8788086, 29.5076538,h1 + double(5), ALTMODE_ABSOLUTE);
+    m_plane2 = createPlane(m_plane, location, m_mapSRS.get(), 100000, 50);
+
+    m_plane2->setName("plane2");
+    m_root->addChild( m_plane2.get() );
+
+    setNodeTracker(location);
+
+    osg::ref_ptr<osg::Group> losGroup = new osg::Group();
+    losGroup->getOrCreateStateSet()->setRenderingHint(osg::StateSet::TRANSPARENT_BIN);
     losGroup->getOrCreateStateSet()->setAttributeAndModes(new osg::Depth(osg::Depth::ALWAYS, 0, 1, false));
     m_root->addChild(losGroup);
 
-    const SpatialReference* mapSRS = mapNode->getMapSRS();
-    const SpatialReference* geoSRS = mapSRS->getGeographicSRS();
-
     LinearLineOfSightNode* los = new LinearLineOfSightNode(
-                mapNode,
-                GeoPoint(geoSRS, 95.6788086, 29.3076538, 4258.00, ALTMODE_ABSOLUTE),
-                GeoPoint(geoSRS, 95.8788086, 29.5076538, 5620.11, ALTMODE_ABSOLUTE));
+                m_mapNode.get(),
+                GeoPoint(m_geoSRS.get(), 95.6788086, 29.3076538, 4258.00, ALTMODE_ABSOLUTE),
+                GeoPoint(m_geoSRS.get(), 95.8788086, 29.5076538, 5620.11, ALTMODE_ABSOLUTE));
     losGroup->addChild(los);
 
     LinearLineOfSightEditor* p2peditor = new LinearLineOfSightEditor(los);
     m_root->addChild(p2peditor);
 
-    LinearLineOfSightNode* relativeLos = new LinearLineOfSightNode(
-                mapNode,
-                GeoPoint(geoSRS, 95.2788086, 29.3200000, 10, ALTMODE_RELATIVE),
-                GeoPoint(geoSRS, 95.8788086, 29.5076538, 10, ALTMODE_RELATIVE));
-    losGroup->addChild(relativeLos);
-
-    LinearLineOfSightEditor* relEditor = new LinearLineOfSightEditor(relativeLos);
-    m_root->addChild(relEditor);
-
-    double query_resolution = 0.00000001;
-    osgEarth::Map* m_map = mapNode->getMap();
-    osgEarth::ElevationQuery query(m_map);
-    double h1 = query.getElevation(GeoPoint(mapNode->getMapSRS(), 95.8788086, 29.5076538, 0.0, osgEarth::AltitudeMode::ALTMODE_ABSOLUTE), query_resolution);
-
-    osg::ref_ptr<osg::Node> plane = osgDB::readNodeFile("/home/liu/Desktop/osgEarth/osgEarthData/dumptruck.osgt.5,5,5.scale");
-    osg::ref_ptr<osg::Node> plane_d = osgDB::readNodeFile("/home/liu/osg/data/cessna.osg");
-
-    osg::Node* plane1 = createPlane(plane, GeoPoint(geoSRS, 95.8788086, 29.5076538,h1+(double)2000, ALTMODE_ABSOLUTE), mapSRS, 10, 5);
-    osg::Node* plane2 = createPlane(plane_d, GeoPoint(geoSRS, 95.8788086, 29.5076538,h1 + double(1000), ALTMODE_ABSOLUTE), mapSRS, 1000, 100);
-
-    m_root->addChild( plane1 );
-    plane1->setName("plane1");
-    m_root->addChild( plane2 );
-
+    m_earthManip = new EarthManipulator();
     osgEarth::Viewpoint vp;
     vp.name() = "Mt Ranier";
-    double equatorRadius = geoSRS->getEllipsoid()->getRadiusEquator();
-    vp.focalPoint()->set(geoSRS,95.8788086, 29.5076538, h1 + (double) 1010 , ALTMODE_ABSOLUTE);
+//    double equatorRadius = geoSRS->getEllipsoid()->getRadiusEquator();
+    vp.focalPoint()->set(m_geoSRS.get(),95.8788086, 29.5076538, h1 + (double) 1010 , ALTMODE_ABSOLUTE);
     vp.pitch() = 0.0;
     vp.range() =1000;
+    m_earthManip->setHomeViewpoint(vp);
+    m_earthManip->setViewpoint(vp);
 
-    GeoPoint pos = GeoPoint(geoSRS, 95.8788086, 29.5076538,h1+(double)2000, ALTMODE_ABSOLUTE);
-    GeoPoint mapPos = pos.transform(mapSRS);
-    osg::Vec3d centerWorld;
-    mapPos.toWorld(centerWorld);
-    osg::Vec3 ZeroPoint = osg::Vec3(centerWorld.x(), centerWorld.y(), centerWorld.z());
-    osg::Vec3 HomePoint = ZeroPoint - osg::Vec3(0, 100, 0);
-    osg::Vec3 Direction = ZeroPoint/*.normalize()*/;
 
-    m_nodeTracker = new osgGA::NodeTrackerManipulator;
-    m_nodeTracker->setHomePosition( HomePoint, ZeroPoint/*osg::Vec3()*/, Direction/*osg::Z_AXIS*/ );
-    m_nodeTracker->setTrackerMode(osgGA::NodeTrackerManipulator::NODE_CENTER_AND_ROTATION);
-    m_nodeTracker->setRotationMode( osgGA::NodeTrackerManipulator::TRACKBALL );
-    m_nodeTracker->setTrackNode( plane_d );
+    return 0;
+}
+
+int CSceneManager::readEarthDataBaseFrmFile()
+{
+    CMapManager* mapManager = new CMapManager("/home/liu/Desktop/osgEarth/osgEarthData/bluemarble.earth");
+    m_earthNode = mapManager->getEarthNode();
+    m_mapNode = mapManager->getMapNode();
+    if(!m_earthNode || !m_mapNode)
+    {
+       std::cout << "读取地球数据文件失败！";
+       return READDATABASE_ERROR;
+    }
+
+    m_mapSRS = m_mapNode->getMapSRS();
+    m_geoSRS = m_mapSRS->getGeographicSRS();
+
+    return 0;
 }
 
 osg::Group *CSceneManager::getRootScene()
@@ -89,6 +82,11 @@ osgGA::NodeTrackerManipulator *CSceneManager::getNodeTrackerManipulator()
     return m_nodeTracker.get();//m_nodeTracker.get();
 }
 
+EarthManipulator *CSceneManager::getEarthManipulator()
+{
+    return m_earthManip.get();
+}
+
 int CSceneManager::addChild(osg::Node *_object)
 {
     m_root->addChild(_object);
@@ -97,12 +95,12 @@ int CSceneManager::addChild(osg::Node *_object)
 
 osg::Node *CSceneManager::createPlane(osg::Node *node, const GeoPoint &pos, const SpatialReference *mapSRS, double radius, double time)
 {
-    osg::MatrixTransform* positioner =  new osg::MatrixTransform;
+    osg::ref_ptr<osg::MatrixTransform> positioner =  new osg::MatrixTransform;
     positioner->addChild(node);
-    osg::AnimationPath* animationPath = createAnimationPath(pos, mapSRS, radius, time);
-    positioner->setUpdateCallback(new osg::AnimationPathCallback(animationPath, 0.0, 1.0));
+    osg::ref_ptr<osg::AnimationPath> animationPath = createAnimationPath(pos, mapSRS, radius, time);
+    positioner->setUpdateCallback(new osg::AnimationPathCallback(animationPath.get(), 0.0, 1.0));
 
-    return positioner;
+    return positioner.release();
 }
 
 osg::AnimationPath *CSceneManager::createAnimationPath(const GeoPoint &pos, const SpatialReference *mapSRS, float radius, double looptime)
@@ -129,7 +127,7 @@ osg::AnimationPath *CSceneManager::createAnimationPath(const GeoPoint &pos, cons
     {
         double angle = delta * (double) i;
         osg::Quat quat(angle, up);
-        osg::Vec3d spoke = quat * (side * radius*(i+1));
+        osg::Vec3d spoke = up * radius /numSamples * (i+1);//quat * (side * radius/**(i+1)*/);
         osg::Vec3d end = centerWorld + spoke;
         //mapPos.fromWorld(mapSRS, end);
 
@@ -148,4 +146,44 @@ osg::AnimationPath *CSceneManager::createAnimationPath(const GeoPoint &pos, cons
     }
     animationPath->insert(time, osg::AnimationPath::ControlPoint(firstPosition, firstRotation));
     return animationPath;
+}
+
+osg::Vec3d CSceneManager::calculateWorldPos(const SpatialReference *_mapSRS, GeoPoint _Pos)
+{
+    GeoPoint mapPos = _Pos.transform(_mapSRS);
+    osg::Vec3d centerWorld;
+    mapPos.toWorld(centerWorld);
+    return centerWorld;
+}
+
+double CSceneManager::calculateHeightForPoint(GeoPoint _point)
+{
+    double query_resolution = 0.00000001;
+    osgEarth::Map* m_map = m_mapNode->getMap();
+    osgEarth::ElevationQuery query(m_map);
+    double h = query.getElevation(_point, query_resolution);
+    if(h > 0)
+        return h;
+    else
+        return 0;
+}
+
+int CSceneManager::setNodeTracker(GeoPoint _location)
+{
+    osg::Vec3d centerWorld = calculateWorldPos(m_mapSRS, _location);
+    //object
+    osg::Vec3 ZeroPoint = osg::Vec3(centerWorld.x(), centerWorld.y(), centerWorld.z());
+    //eye
+    osg::Vec3 HomePoint = ZeroPoint + osg::Vec3(0, 0, 1000)/*osg::Vec3(0, 100, 0)*/;
+    //direction
+    osg::Vec3 Direction = osg::Vec3(0, -1, 0)/*.normalize()*/;
+
+    m_nodeTracker = new osgGA::NodeTrackerManipulator;
+    m_nodeTracker->setHomePosition( HomePoint, ZeroPoint/*osg::Vec3()*/, Direction/*osg::Z_AXIS*/ );
+    m_nodeTracker->setTrackerMode(osgGA::NodeTrackerManipulator::NODE_CENTER_AND_ROTATION);
+    m_nodeTracker->setRotationMode( osgGA::NodeTrackerManipulator::TRACKBALL );
+    m_nodeTracker->setTrackNode( m_plane );
+
+    return 0;
+
 }
